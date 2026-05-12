@@ -10,12 +10,11 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
-   ->withRouting(
-    web: __DIR__.'/../routes/web.php',
-    commands: __DIR__.'/../routes/console.php',
-    health: '/up',
-)
-   
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
@@ -23,31 +22,78 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
 
-    $exceptions->render(function (Throwable $e, Request $request) {
+        $exceptions->report(function (Throwable $e) {
+            try {
+                $request = request();
 
-        if ($e instanceof ValidationException) {
-            return response()->validationError($e->errors());
-        }
+                $status = method_exists($e, 'getStatusCode')
+                    ? $e->getStatusCode()
+                    : 500;
 
-        if ($e instanceof AuthenticationException) {
-            return response()->unauthorized();
-        }
+                $errorData = [
+                    'message'      => $e->getMessage(),
+                    'type'         => get_class($e),
+                    'severity'     => $status >= 500 ? 'critical' : 'error',
+                    'file'         => $e->getFile(),
+                    'line'         => $e->getLine(),
+                    'stack_trace'  => $e->getTraceAsString(),
+                    'url'          => $request->fullUrl(),
+                    'method'       => $request->method(),
+                    'request_body' => json_encode($request->except(['password', 'token'])),
+                    'ip_address'   => $request->ip(),
+                    'user_id'      => null,
+                    'status_code'  => $status,
+                ];
 
-        if ($e instanceof NotFoundHttpException) {
-            return response()->notFound();
-        }
+                \App\Models\ErrorLog::create($errorData);
 
-        if ($e instanceof MethodNotAllowedHttpException) {
-            return response()->error('Method not allowed', 405);
-        }
+                $payload = json_encode([
+                    'type' => 'error',
+                    'data' => $errorData,
+                ]);
 
-        $status = method_exists($e, 'getStatusCode') ? $e->getStatusCode() : 500;
+                $socket = @stream_socket_client(
+                    'tcp://127.0.0.1:8080',
+                    $errno,
+                    $errstr,
+                    1
+                );
 
-        return response()->error(
-            app()->environment('production') ? 'Server Error' : $e->getMessage(),
-            $status
-        );
-    });
+                if ($socket) {
+                    fwrite($socket, $payload);
+                    fclose($socket);
+                }
 
-})
+            } catch (\Throwable $loggingException) {
+                // silent fail
+            }
+        });
+
+        $exceptions->render(function (Throwable $e, Request $request) {
+
+            if ($e instanceof ValidationException) {
+                return response()->validationError($e->errors());
+            }
+
+            if ($e instanceof AuthenticationException) {
+                return response()->unauthorized();
+            }
+
+            if ($e instanceof NotFoundHttpException) {
+                return response()->notFound();
+            }
+
+            if ($e instanceof MethodNotAllowedHttpException) {
+                return response()->error('Method not allowed', 405);
+            }
+
+            $status = method_exists($e, 'getStatusCode') ? $e->getStatusCode() : 500;
+
+            return response()->error(
+                app()->environment('production') ? 'Server Error' : $e->getMessage(),
+                $status
+            );
+        });
+
+    })
     ->create();
