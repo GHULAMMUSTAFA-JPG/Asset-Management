@@ -26,5 +26,9 @@ class RouteServiceProvider extends ServiceProvider
         Route::middleware('api')
             ->prefix('api')
             ->group(__DIR__ . '/../../routes/admin.php');
+
+        Route::middleware('api')
+            ->prefix('api')
+            ->group(__DIR__ . '/../../routes/maintenance.php');
     }
 }
